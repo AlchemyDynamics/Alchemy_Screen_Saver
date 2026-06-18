@@ -310,7 +310,7 @@
     }
 
     mode = 'head';
-    setHud('head', 'Head tracking — turn your head');
+    hud.classList.remove('show');   // no notice — the effect speaks for itself
 
     let lastTs = -1;
     function detect() {
@@ -323,9 +323,10 @@
           const d = m.data;
           const yaw = Math.atan2(d[8], d[10]);   // rotation about Y
           const pitch = Math.asin(-Math.max(-1, Math.min(1, d[9]))); // about X
-          // Map to [-1,1] with a deadzone; mirror yaw (selfie view).
-          const ny = clampDead(-yaw / 0.6);
-          const np = clampDead(pitch / 0.5);
+          // Map to [-1,1] with a deadzone. Directions inverted so the field
+          // leans the way the viewer looks toward.
+          const ny = clampDead(yaw / 0.6);
+          const np = clampDead(-pitch / 0.5);
           target.x = ny;
           target.y = np;
           lastInput = performance.now();
