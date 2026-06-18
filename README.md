@@ -42,6 +42,30 @@ python3 -m http.server 8000
 | Move mouse | Steer the field (overrides nothing if tracking is on) |
 | Idle | Falls back to a slow autonomous drift |
 
+## Multi-monitor video wall
+
+The starfield is a single full-window canvas, so to run it as **one continuous
+scene across three (or more) monitors** you just need one browser window that
+spans the whole extended desktop — the logo lands on the center screen and the
+stars flow across all of them. Head tracking still works because it's one page
+sharing the one webcam.
+
+On Windows, double-click **`launch-wall.bat`** (or right-click
+`launch-wall.ps1` → *Run with PowerShell*). It auto-detects the full
+virtual-desktop size and opens a chromeless Chrome/Edge window sized to span
+every monitor. Click **Enter with head tracking** once and allow the camera.
+
+Requirements / tips:
+- Monitors should be **arranged in one row** in *Display Settings* (same height
+  rows span cleanly; an L-shaped layout leaves gaps).
+- The launcher points at the live GitHub Pages build over HTTPS so the webcam is
+  allowed. To use a local copy, edit `$Url` in `launch-wall.ps1` and serve the
+  folder first.
+- Exit with **Alt+F4**.
+
+Doing it by hand instead: open the page, un-maximize the window, drag it to the
+top-left monitor, and resize until it covers all three.
+
 ## How the steering works
 
 Each star has a 3D position; the camera flies forward and stars are recycled to

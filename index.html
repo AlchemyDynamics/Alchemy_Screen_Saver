@@ -117,7 +117,11 @@
   // Each star lives in a 3D volume. The camera flies forward (z shrinks); when a
   // star passes the camera it's recycled to the far plane. Perspective projection
   // makes near stars sweep faster than far ones — that's the parallax.
-  const NUM_STARS = 720;
+  // Star count scales with screen area so a wide multi-monitor "wall" stays
+  // evenly populated (capped to keep the per-star glow gradients affordable).
+  const AREA_REF = 1920 * 1080;
+  const NUM_STARS = Math.max(500, Math.min(1500,
+    Math.round(720 * (innerWidth * innerHeight) / AREA_REF)));
   const FAR = 1600;          // far clip
   const NEAR = 1;            // near clip
   const SPEED = 3.2;         // base travel speed (subtle, slow cruise)
