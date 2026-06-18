@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Alchemy Dynamics — Screensaver</title>
+<style>
+  :root { --accent: #b07bff; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #05010f; cursor: none; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+
+  #stars { position: fixed; inset: 0; display: block; z-index: 1; }
+
+  /* Logo, centered, with a soft float + glow */
+  #logoWrap {
+    position: fixed; inset: 0; z-index: 2;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+  }
+  #logo {
+    width: min(42vw, 42vh); height: auto;
+    filter: drop-shadow(0 0 28px rgba(176,123,255,0.55))
+            drop-shadow(0 0 70px rgba(124,77,255,0.30));
+    will-change: transform;
+    opacity: 0;
+    transition: opacity 1.6s ease;
+  }
+  #logo.ready { opacity: 1; }
+
+  /* HUD / status pill */
+  #hud {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    z-index: 3; display: flex; align-items: center; gap: 10px;
+    padding: 9px 16px; border-radius: 999px;
+    background: rgba(20,8,40,0.45); backdrop-filter: blur(8px);
+    border: 1px solid rgba(176,123,255,0.25);
+    color: #d9c9ff; font-size: 12.5px; letter-spacing: 0.3px;
+    opacity: 0; transition: opacity 0.6s ease; user-select: none;
+  }
+  #hud.show { opacity: 1; }
+  #hud .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b5a8a; box-shadow: 0 0 8px currentColor; }
+  #hud.tracking .dot { background: #56e08a; }
+  #hud.mouse .dot { background: #7c4dff; }
+
+  /* Start overlay (camera needs a user gesture) */
+  #gate {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 22px; background: radial-gradient(circle at 50% 45%, #190a32 0%, #05010f 70%);
+    cursor: pointer; transition: opacity 0.8s ease;
+  }
+  #gate.hide { opacity: 0; pointer-events: none; }
+  #gate h1 {
+    color: #e9deff; font-weight: 600; font-size: clamp(20px, 3.4vw, 34px);
+    letter-spacing: 4px; text-transform: uppercase;
+    text-shadow: 0 0 24px rgba(176,123,255,0.6);
+  }
+  #gate p { color: #9a86c4; font-size: 14px; max-width: 440px; text-align: center; line-height: 1.6; }
+  #gate .btn {
+    margin-top: 6px; padding: 13px 30px; border-radius: 999px;
+    border: 1px solid rgba(176,123,255,0.5);
+    background: linear-gradient(135deg, rgba(124,77,255,0.35), rgba(176,123,255,0.18));
+    color: #f3ecff; font-size: 14px; letter-spacing: 1.5px; text-transform: uppercase;
+  }
+  #gate .sub { color: #6f5d96; font-size: 12px; }
+
+  /* Hidden video element used for face tracking */
+  #cam { position: fixed; width: 2px; height: 2px; opacity: 0; pointer-events: none; top: 0; left: 0; }
+</style>
+</head>
+<body>
+  <canvas id="stars"></canvas>
+
+  <div id="logoWrap">
+    <img id="logo" src="assets/logo.png" alt="Alchemy Dynamics" />
+  </div>
+
+  <div id="hud"><span class="dot"></span><span id="hudText">Auto drift</span></div>
+
+  <div id="gate">
+    <h1>Alchemy Dynamics</h1>
+    <p>A traveling purple starfield. Allow the camera and the stars will lean
+       the way you turn your head — or skip it and steer with your mouse.</p>
+    <button class="btn" id="startCam">Enter with head tracking</button>
+    <span class="sub" id="skip">or continue without camera</span>
+  </div>
+
+  <video id="cam" autoplay playsinline muted></video>
+
+  <script type="module">
+  // ---------------------------------------------------------------------------
+  // Alchemy Dynamics Screensaver
+  // Purple star-travel field + parallax + optional webcam head steering.
+  // ---------------------------------------------------------------------------
+
+  const canvas = document.getElementById('stars');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const logo = document.getElementById('logo');
+  const hud = document.getElementById('hud');
+  const hudText = document.getElementById('hudText');
+  const gate = document.getElementById('gate');
+
+  let W, H, CX, CY;
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = canvas.width = Math.floor(innerWidth * dpr);
+    H = canvas.height = Math.floor(innerHeight * dpr);
+    canvas.style.width = innerWidth + 'px';
+    canvas.style.height = innerHeight + 'px';
+    CX = W / 2; CY = H / 2;
+  }
+  resize();
+  addEventListener('resize', resize);
+
+  // --- Star field -----------------------------------------------------------
+  // Each star lives in a 3D volume. The camera flies forward (z shrinks); when a
+  // star passes the camera it's recycled to the far plane. Perspective projection
+  // makes near stars sweep faster than far ones — that's the parallax.
+  const NUM_STARS = 720;
+  const FAR = 1600;          // far clip
+  const NEAR = 1;            // near clip
+  const SPEED = 3.2;         // base travel speed (subtle, slow cruise)
+  const FOV = 520;           // focal length in px-ish units
+
+  // Purple palette — cores trend white-violet, halos trend magenta/indigo.
+  const PALETTE = [
+    [198, 170, 255], [176, 123, 255], [149, 97, 255],
+    [124, 77, 255],  [221, 160, 255], [160, 120, 245],
+    [255, 255, 255], [205, 190, 255],
+  ];
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  function makeStar(spawnFar) {
+    return {
+      x: rand(-W, W),
+      y: rand(-H, H),
+      z: spawnFar ? FAR : rand(NEAR, FAR),
+      c: PALETTE[(Math.random() * PALETTE.length) | 0],
+      tw: rand(0, Math.PI * 2),          // twinkle phase
+      tws: rand(0.5, 2.2),               // twinkle speed
+      px: 0, py: 0, pr: 0,               // last projected position (for streaks)
+    };
+  }
+
+  const stars = Array.from({ length: NUM_STARS }, () => makeStar(false));
+
+  // --- Steering state --------------------------------------------------------
+  // dir.x / dir.y is the normalized look direction in [-1,1]. Smoothed toward a
+  // target set by head tracking, mouse, or a slow autonomous drift.
+  const dir = { x: 0, y: 0 };
+  const target = { x: 0, y: 0 };
+  let mode = 'auto';           // 'auto' | 'mouse' | 'head'
+  let lastInput = performance.now();
+
+  // Autonomous Lissajous drift when nothing else is steering.
+  function autoTarget(t) {
+    target.x = Math.sin(t * 0.00021) * 0.55 + Math.sin(t * 0.00007) * 0.25;
+    target.y = Math.cos(t * 0.00017) * 0.45 + Math.sin(t * 0.00009) * 0.2;
+  }
+
+  // Mouse fallback steering.
+  addEventListener('mousemove', (e) => {
+    if (mode === 'head') return;          // head tracking wins
+    mode = 'mouse';
+    lastInput = performance.now();
+    target.x = (e.clientX / innerWidth - 0.5) * 2;
+    target.y = (e.clientY / innerHeight - 0.5) * 2;
+    setHud('mouse', 'Mouse steering');
+  });
+
+  function setHud(cls, text) {
+    hud.classList.remove('tracking', 'mouse');
+    if (cls === 'head') hud.classList.add('tracking');
+    else if (cls === 'mouse') hud.classList.add('mouse');
+    hudText.textContent = text;
+    hud.classList.add('show');
+  }
+
+  // --- Render loop -----------------------------------------------------------
+  let logoT = 0;
+  function frame(t) {
+    // Revert to autonomous drift if no live input for a while.
+    if (mode !== 'head' && t - lastInput > 4000) {
+      mode = 'auto';
+      autoTarget(t);
+      setHud('auto', 'Auto drift');
+    } else if (mode === 'auto') {
+      autoTarget(t);
+    }
+
+    // Ease the look direction toward target (subtle, smooth).
+    dir.x += (target.x - dir.x) * 0.045;
+    dir.y += (target.y - dir.y) * 0.045;
+
+    // Fade trails for a gentle motion-streak feel.
+    ctx.fillStyle = 'rgba(5, 1, 15, 0.42)';
+    ctx.fillRect(0, 0, W, H);
+
+    // The vanishing point shifts opposite to the look direction, and stars get a
+    // lateral velocity in the look direction — together this reads as "steering."
+    const steerX = dir.x * 1.9;   // lateral drift applied per-depth
+    const steerY = dir.y * 1.9;
+    const vpX = CX + dir.x * (W * 0.16);   // shifted vanishing point
+    const vpY = CY + dir.y * (H * 0.16);
+
+    for (let i = 0; i < stars.length; i++) {
+      const s = stars[i];
+
+      // Travel forward + lateral steer (steer scales with proximity for parallax).
+      s.z -= SPEED;
+      const prox = (FAR - s.z) / FAR;        // 0 far → 1 near
+      s.x += steerX * (0.4 + prox * 2.2);
+      s.y += steerY * (0.4 + prox * 2.2);
+
+      if (s.z <= NEAR) { Object.assign(s, makeStar(true)); continue; }
+
+      const k = FOV / s.z;
+      const sx = vpX + s.x * k;
+      const sy = vpY + s.y * k;
+
+      // Recycle stars that fly off-screen.
+      if (sx < -50 || sx > W + 50 || sy < -50 || sy > H + 50) {
+        Object.assign(s, makeStar(true)); continue;
+      }
+
+      const depth = 1 - s.z / FAR;                 // 0 far → 1 near
+      const twinkle = 0.65 + 0.35 * Math.sin(t * 0.001 * s.tws + s.tw);
+      const r = Math.max(0.3, depth * 2.6) ;
+      const alpha = Math.min(1, 0.15 + depth * 0.95) * twinkle;
+      const [cr, cg, cb] = s.c;
+
+      // Motion streak: line from previous projected point to current.
+      if (s.pr > 0 && depth > 0.12) {
+        ctx.strokeStyle = `rgba(${cr},${cg},${cb},${alpha * 0.5})`;
+        ctx.lineWidth = r;
+        ctx.beginPath();
+        ctx.moveTo(s.px, s.py);
+        ctx.lineTo(sx, sy);
+        ctx.stroke();
+      }
+
+      // Star core with a soft glow.
+      ctx.beginPath();
+      const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 3.2);
+      glow.addColorStop(0, `rgba(${cr},${cg},${cb},${alpha})`);
+      glow.addColorStop(0.4, `rgba(${cr},${cg},${cb},${alpha * 0.4})`);
+      glow.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = glow;
+      ctx.arc(sx, sy, r * 3.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      s.px = sx; s.py = sy; s.pr = r;
+    }
+
+    // Subtle logo parallax — leans slightly into the look direction + slow float.
+    logoT = t;
+    const fl = Math.sin(t * 0.0006) * 6;
+    logo.style.transform =
+      `translate(${dir.x * 22}px, ${dir.y * 18 + fl}px) ` +
+      `rotateY(${dir.x * 6}deg) rotateX(${-dir.y * 6}deg) ` +
+      `scale(${1 + Math.sin(t * 0.0009) * 0.012})`;
+
+    requestAnimationFrame(frame);
+  }
+
+  logo.addEventListener('load', () => logo.classList.add('ready'));
+  if (logo.complete) logo.classList.add('ready');
+  requestAnimationFrame(frame);
+
+  // --- Head tracking (MediaPipe FaceLandmarker) ------------------------------
+  const video = document.getElementById('cam');
+
+  async function startHeadTracking() {
+    setHud('auto', 'Starting camera…');
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: 'user' }, audio: false,
+      });
+    } catch (err) {
+      setHud('mouse', 'Camera denied — move your mouse');
+      return false;
+    }
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+
+    let FaceLandmarker, FilesetResolver, landmarker;
+    try {
+      ({ FaceLandmarker, FilesetResolver } = await import(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs'
+      ));
+      const fileset = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+      );
+      landmarker = await FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: {
+          modelAssetPath:
+            'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+          delegate: 'GPU',
+        },
+        runningMode: 'VIDEO',
+        numFaces: 1,
+        outputFacialTransformationMatrixes: true,
+      });
+    } catch (err) {
+      setHud('mouse', 'Tracker unavailable — move your mouse');
+      return false;
+    }
+
+    mode = 'head';
+    setHud('head', 'Head tracking — turn your head');
+
+    let lastTs = -1;
+    function detect() {
+      if (video.readyState >= 2 && video.currentTime !== lastTs) {
+        lastTs = video.currentTime;
+        const res = landmarker.detectForVideo(video, performance.now());
+        const m = res.facialTransformationMatrixes && res.facialTransformationMatrixes[0];
+        if (m && m.data) {
+          // Column-major 4x4. Extract yaw & pitch from the rotation basis.
+          const d = m.data;
+          const yaw = Math.atan2(d[8], d[10]);   // rotation about Y
+          const pitch = Math.asin(-Math.max(-1, Math.min(1, d[9]))); // about X
+          // Map to [-1,1] with a deadzone; mirror yaw (selfie view).
+          const ny = clampDead(-yaw / 0.6);
+          const np = clampDead(pitch / 0.5);
+          target.x = ny;
+          target.y = np;
+          lastInput = performance.now();
+        }
+      }
+      requestAnimationFrame(detect);
+    }
+    detect();
+    return true;
+  }
+
+  function clampDead(v) {
+    const dead = 0.08;
+    if (Math.abs(v) < dead) return 0;
+    v = (v - Math.sign(v) * dead) / (1 - dead);
+    return Math.max(-1, Math.min(1, v));
+  }
+
+  // --- Gate / entry ----------------------------------------------------------
+  function enter() { gate.classList.add('hide'); }
+
+  document.getElementById('startCam').addEventListener('click', async () => {
+    enter();
+    await startHeadTracking();
+  });
+  document.getElementById('skip').addEventListener('click', () => {
+    enter();
+    setHud('mouse', 'Move your mouse to steer');
+  });
+
+  // Hide the cursor-idle HUD after a moment of stillness on auto.
+  setTimeout(() => { if (mode === 'auto') hud.classList.add('show'); }, 1200);
+  </script>
+</body>
+</html>
