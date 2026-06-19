@@ -42,6 +42,18 @@ python3 -m http.server 8000
 | Move mouse | Steer the field (overrides nothing if tracking is on) |
 | Idle | Falls back to a slow autonomous drift |
 
+### Choosing which camera
+
+If you have more than one camera (e.g. a laptop cam **and** an external webcam),
+pick the one you want from the **Camera** dropdown on the start screen. Once
+tracking is running you can also switch on the fly: move the mouse to wake the
+small status pill (bottom center) and choose a different camera from its
+dropdown. Your choice is remembered for next time.
+
+> Camera *names* only appear after you've granted permission once. On the very
+> first run the dropdown may be empty — click **Enter with head tracking**, allow
+> access, and the names will populate (and persist on later launches).
+
 ## Multi-monitor video wall
 
 The starfield is a single full-window canvas, so to run it as **one continuous
